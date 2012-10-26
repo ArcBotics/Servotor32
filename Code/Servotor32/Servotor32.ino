@@ -12,30 +12,31 @@
 
 //setup timing variables
 signed short servoPositions[32];   //array of servo position values [servo]=position in 10's of uSs
-unsigned char pulseWidths[201][4]; //array of when to change what pins at what times
+uint8_t pulseWidths[201][4]; //array of when to change what pins at what times
                                    //[time in 10's of uS -50uS][servo group]=group bitmask
-unsigned short timeIncs = 0;       //number of time increments passed
-unsigned char output = 0xFF;
 
-unsigned char portBitMaskZeroes[9] = {0x01,0x02,0x04,0x08, 0x10,0x20,0x40,0x80, 0x00};
-unsigned char portBitMaskOnes[9]   = {0xFE,0xFD,0xFB,0xF7, 0xEF,0xDF,0xBF,0x7F, 0xFF};
+uint8_t portBitMaskZeroes[9] = {0x01,0x02,0x04,0x08, 0x10,0x20,0x40,0x80, 0x00};
+uint8_t portBitMaskOnes[9]   = {0xFE,0xFD,0xFB,0xF7, 0xEF,0xDF,0xBF,0x7F, 0xFF};
 
-unsigned char bitMaskZeroes[9] = {0x08,0x4,0x02,0x01, 0x80,0x40,0x20,0x10, 0x00};
-unsigned char bitMaskOnes[9]   = {0xF7,0xFB,0xFD,0xFE, 0x7F,0xBF,0xDF,0xEF, 0xFF};
+uint8_t bitMaskZeroes[9] = {0x08,0x4,0x02,0x01, 0x80,0x40,0x20,0x10, 0x00};
+uint8_t bitMaskOnes[9]   = {0xF7,0xFB,0xFD,0xFE, 0x7F,0xBF,0xDF,0xEF, 0xFF};
 
-unsigned char groupPin[4] = {5,6,7,4};
+uint8_t groupPin[4] = {5,6,7,4};
 
-signed char pwmActive = 1;
+uint8_t pwm_active = 1;
 
 void setup() {
   pinMode(STATUS_LED,OUTPUT);
   //setup pin modes
   DDRF = 0xFF;  // sets pins B0 to B7 as outputs
+  pinMode(10,OUTPUT);
   //setup PC serial port
   Serial.begin(115200);
-  while (!Serial) {};
-
-  //setup SPI port
+  Serial1.begin(115200);
+  delay(100); // delay to establish the usb connection. using the arduino while-serial command doesn't 
+              // let it boot properly when there's no USB conenction.
+  
+  // setup SPI port
   SPI.begin(); 
   SPI.setClockDivider(SPI_CLOCK_DIV2);
   
@@ -53,131 +54,117 @@ void setup() {
   //start the servo-timing timer and associated interrupt
   Timer1.initialize(10);        // initialize timer1, and set a period of 10 uS
   Timer1.attachInterrupt(callback);  // attaches callback() as a timer overflow interrupt  
-  
 }
 
-/*
-void shiftOutSpi(unsigned char outByte, unsigned char chip_latch){
-  SPDR = outByte;
-  while(!(SPSR & (1<<SPIF)));
-  PORTF |= portBitMaskZeroes[chip_latch];
-  PORTF &= portBitMaskOnes[chip_latch];
-}
-*/
-unsigned char group = 0;
-unsigned short minPeriod = 50;
-unsigned short maxPeriod = 250;
-unsigned short switchTime = 260;
-#define INCREMENT_TIME 260 //the number of 10s of microseconds between pulse groups
+
 #define LARGEST_GROUP 3 //the largested-numbered group of servos. Largest possible is 
+#define INCREMENT_TIME 251 //the number of 10s of microseconds between pulse groups
 
-byte outputBuffer = 0;
-byte groupPinBuffer = 0;
+uint8_t group = 0;
+uint16_t min_period = 50;
+uint16_t max_period = INCREMENT_TIME-1;
+uint16_t switch_time = INCREMENT_TIME;
 
-byte updateFlag = 1;
-byte canUpdateServos = 0;
+uint16_t timer_inc = 0;       //number of time increments passeds
+
+uint8_t update_flag = 0;
+
+uint8_t output_byte = 0x00;
+uint8_t output_latch_low = 0x00;
+uint8_t output_latch_high = 0x00;
 
 void callback()
 {
-  if(updateFlag == 1){
-    SPDR = outputBuffer;
-    while(!(SPSR & (1<<SPIF)));
-    PORTF |= portBitMaskZeroes[groupPinBuffer];
-    PORTF &= portBitMaskOnes[groupPinBuffer];
-    updateFlag = 0;
-  }
+  timer_inc++;
+  // the trick here is to pre-compute as much as possible, so you're not incuring variable computation delays when shifting
+  if(update_flag == 1){ //if there is an update that needs to be made
+    // shift up an update to the appropriate shift register
+    SPDR = output_byte; // push the byte to be loaded to the SPI register
+    __asm__("nop\n\t"); // pause to wait for the spi register to complete its shift out
+    //while(!(SPSR & (1<<SPIF))); //wait till the register completes
+    PORTF &= output_latch_low; // clock the shift register latch pin low, setting the register
+    PORTF |= output_latch_high; // clock the shift register latch pin high, ready to be set low next time
+    update_flag=0;
+  } 
   
   //update the servos in the appropriate group based on the groups timing array (pulseWidths)
-  if((timeIncs >=minPeriod) && (timeIncs <=maxPeriod)){
-    if(pulseWidths[timeIncs-minPeriod][group] != 0xFF){ //if there are any changes to Port B
-      output &= pulseWidths[timeIncs-minPeriod][group];
-      outputBuffer = output;
-      groupPinBuffer = groupPin[group];
-      updateFlag = 1;
+  if((timer_inc >= min_period) && (timer_inc <= max_period)){
+    if(pulseWidths[timer_inc - min_period][group] != 0xFF){ //if there are any changes to Port B
+      output_byte &= pulseWidths[timer_inc-min_period][group];
+      output_latch_low  = portBitMaskOnes[groupPin[group]];
+      output_latch_high = portBitMaskZeroes[groupPin[group]];
+      update_flag = 1;
     }
   }
   
   //move to the next servo group, bring the pins high to start that servo period
-  if(timeIncs==switchTime){
-    if(group==LARGEST_GROUP){ //if its the first group of the cycle
-      if(switchTime == 2000){ // number to get a 20ms update cycle
-        canUpdateServos = 0;
-        timeIncs=0;  //reset increment timer
-        group=0;
-        minPeriod=50;
-        maxPeriod=250;
-        switchTime=260;
-        pwmActive=1; 
-        output = 0xFF;
-        outputBuffer = output;
-        groupPinBuffer = groupPin[group];
-        updateFlag = 1;
-      }
-      else{
-        canUpdateServos = 1;
-        switchTime=2000; // number to get a 20ms update cycle
-        pwmActive=0;
-      }
-    }
-    else{
+  if(timer_inc == 2000){
+    timer_inc = 0;  //reset increment timer
+    group = 0;
+    min_period = 50;
+    max_period = INCREMENT_TIME-1;
+    switch_time = INCREMENT_TIME;
+    pwm_active = 1; 
+    output_byte = 0xFF;
+    output_latch_low  = portBitMaskOnes[groupPin[group]];
+    output_latch_high = portBitMaskZeroes[groupPin[group]];
+    update_flag = 1;
+  }
+  
+  if(timer_inc == switch_time){
+    if(group != LARGEST_GROUP){
       group++; //increment the group
-      minPeriod += INCREMENT_TIME;
-      maxPeriod += INCREMENT_TIME;
-      switchTime += INCREMENT_TIME;
-      output = 0xFF;
-      outputBuffer = output;
-      groupPinBuffer = groupPin[group];
-      updateFlag = 1; 
+      min_period += INCREMENT_TIME; // setup the new timing parameters for the group
+      max_period += INCREMENT_TIME;
+      switch_time += INCREMENT_TIME;
+      output_byte = 0xFF; 
+      output_latch_low  = portBitMaskOnes[groupPin[group]];
+      output_latch_high = portBitMaskZeroes[groupPin[group]];
+      update_flag = 1; 
+    }
+    else{ //if its the first group of the cycle
+      switch_time = 2000; // number to get a 20ms update cycle
+      pwm_active = 0;
     }
   }
-  timeIncs++;
 }
 
-void updatePWM(byte servoNum, short servoPos){
-  
-  servoPos = servoPos;
+uint8_t grouServoNumTable [32] = {0,1,2,3,4,5,6,7,
+                                  0,1,2,3,4,5,6,7,
+                          0,1,2,3,4,5,6,7,
+                          0,1,2,3,4,5,6,7};
+                          
+uint8_t groupTable [32] = {0,0,0,0,0,0,0,0,
+                   1,1,1,1,1,1,1,1,
+                   2,2,2,2,2,2,2,2,
+                   3,3,3,3,3,3,3,3};
+                          
+void updatePWM(uint8_t servoNum, uint8_t servoPos){
   unsigned short tempPosIndex;
   unsigned short servoPosIndex;
   byte group;
   byte groupServoNum;
   
-  if((servoNum >=0)&&(servoNum <=7)){
-    groupServoNum = servoNum-0;
-    group = 0;
-  }
-  else if((servoNum >=8)&&(servoNum <=15)){
-    groupServoNum = servoNum-8;
-    group = 1;
-  }
-  else if((servoNum >=16)&&(servoNum <=23)){
-    groupServoNum = servoNum-16;
-    group = 2;
-  }
-  else if((servoNum >=24)&&(servoNum <=31)){
-    groupServoNum = servoNum-24;
-    group = 3;
-  }
-  else return;
+  groupServoNum = grouServoNumTable[servoNum];
+  group = groupTable[servoNum];
   
-  tempPosIndex = servoPositions[servoNum]/10-50; //retreive current servo position
-  servoPosIndex = servoPos/10-50;
-
-  while(canUpdateServos == 0){ // pause while pins are updating
-    delayMicroseconds(10);
+  tempPosIndex = servoPositions[servoNum]; //retreive current servo position
+  
+  while(pwm_active == 0){ // pause while pins are updating
+    delayMicroseconds(1); // should implement a double-buffer system instead
   }
   
-  PORTC |= 0x80; // bring PC7 (pin 13) high 
-  if(servoPos == -1){  //kill the servo
+  PORTE |= 0x40; // bring PE6 (pin 7) high, signals servo changed
+  if(servoPos == 0){  //kill the servo
     pulseWidths[tempPosIndex][group] |=  bitMaskZeroes[groupServoNum]; //remove old update position   
     servoPositions[servoNum] = servoPos; //update current servo position
   }
   else{
     pulseWidths[tempPosIndex][group] |=  bitMaskZeroes[groupServoNum]; //remove old update position
-    pulseWidths[servoPosIndex][group] &=  bitMaskOnes[groupServoNum]; //add to new update position
+    pulseWidths[servoPos-50][group] &=  bitMaskOnes[groupServoNum]; //add to new update position
     servoPositions[servoNum] = servoPos; //update current servo position
   }
-  PORTC &= 0x7F; // bring PC7 (pin 13) low 
-  
+  PORTE &= 0xBF; // bring PE6 (pin 7) low, signals servo changed 
 }
 
 boolean debug = false;
@@ -188,7 +175,6 @@ boolean posCounting = false;
 byte numString[6];
 int powers[] = {1,10,100,1000};
 
-
 byte numCount = 0;
 unsigned short total = 0;
 short inServo = -1;
@@ -198,12 +184,25 @@ void loop() {
   digitalWrite(STATUS_LED, HIGH);
   delay(500);
   digitalWrite(STATUS_LED, LOW);
+  delay(500);
+  
+  for(int i=0; i<32; i++){
+    changeServo(i,0);
+  }
+  long startTime=0;
+  long stopTime=0;
+  
+  for(int i=0; i<32; i++){
+    changeServo(i,2500);
+  }
+
   
   while(true){
-    while (Serial.available()) {
+    while(Serial.available()){
       char inChar = (char)Serial.read();
       switch(inChar){
         case '#':
+          startTime = micros();
           servoCounting = true;
           numCount = 0;
           inServo = -1;
@@ -223,22 +222,38 @@ void loop() {
             inPos = tallyCount();
             posCounting = false;
           }
-          if((inServo >=0)&&(inServo <=31)&&(((inPos >= 500)&&(inPos <= 2500))||(inPos == -1))){
+          // !TODO: Speed this up.
+          if((inServo >=0)&&(inServo <=31)&&(((inPos >= 500)&&(inPos <= 2500))||(inPos == 0))){
             changeServo(inServo,inPos);
             inServo = -1;
             inPos = -1;
           }
           numCount = 0;
+          stopTime = micros();
+          Serial.print("time to execute: ");
+          Serial.println(stopTime-startTime);
           break;
         case 'V':
-          Serial.println("SERVOTOR32_v1\n");
+          Serial.println("SERVOTOR32_v1.4");
+          break;
+        case 'C':
+          for(int i=0; i<32; i++){
+            updatePWM(i,150);
+          }
+          Serial.println("All Centered");
+          break;
+        case 'K':
+          for(int i=0; i<32; i++){
+            updatePWM(i,0);
+          }
+          Serial.println("All Turned Off");
           break;
         case 'L':
           if(servoCounting){
             inServo = tallyCount();
             servoCounting = false;
           }
-          changeServo(inServo, -1);
+          changeServo(inServo, 0);
           break;
         default:
           if((inChar > 47)&&(inChar < 58)){
@@ -253,11 +268,15 @@ void loop() {
   }
 }
 
-void changeServo(byte servo, short pos){
-  updatePWM(servo,pos);
+void changeServo(uint8_t servo, short pos){
+  updatePWM(servo,(uint8_t)(pos/10));
 }
 
+// !TODO: increase the speed of this significantly
+// Is there a tables-based approach?
+// only works for numbers 3 digits or less
 short tallyCount(){
+   long 
    total=0;
    for(int i=0; i<numCount; i++){  
      total += powers[i]*numString[(numCount-1)-i];  
