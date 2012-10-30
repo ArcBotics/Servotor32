@@ -266,7 +266,7 @@ void loop() {
             numCount = 0;
             break;
           case 'V':
-            Serial.println("SERVOTOR32_v1.3");
+            Serial.println("SERVOTOR32_v1.5");
             break;
           case 'C':
             for(int i=0; i<32; i++){
