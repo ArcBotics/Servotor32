@@ -1,35 +1,40 @@
-/***************************************************
-~~~~~~~~~~~~~~~~~~~~~ Servitor ~~~~~~~~~~~~~~~~~~~~~
- The Arduino-based, Open-Source 32-Servo Controller
-***************************************************/
-//import libraries
 #include "TimerOne.h"
 #include "SPI.h"
 
-//setup pins - http://pjrc.com/teensy/td_digital.html
-
 #define STATUS_LED 7
 
-//setup timing variables
-signed short servoPositions[32];   //array of servo position values [servo]=position in 10's of uSs
-uint8_t pulseWidths[201][4]; //array of when to change what pins at what times
-                                   //[time in 10's of uS -50uS][servo group]=group bitmask
+#define SERVOS 32
+#define MAX_TIMINGS 36
 
-uint8_t portBitMaskZeroes[9] = {0x01,0x02,0x04,0x08, 0x10,0x20,0x40,0x80, 0x00};
-uint8_t portBitMaskOnes[9]   = {0xFE,0xFD,0xFB,0xF7, 0xEF,0xDF,0xBF,0x7F, 0xFF};
+#define ON10 PORTB |= (1<<6) // turn on pin 10
+#define OFF10 PORTB &= ~(1<<6) // turn off pin 10
 
-uint8_t bitMaskZeroes[9] = {0x08,0x4,0x02,0x01, 0x80,0x40,0x20,0x10, 0x00};
-uint8_t bitMaskOnes[9]   = {0xF7,0xFB,0xFD,0xFE, 0x7F,0xBF,0xDF,0xEF, 0xFF};
+#define GROUPS 4
+#define SERVOS_PER_GROUP 8
 
-uint8_t groupPin[4] = {5,6,7,4};
 
-uint8_t pwm_active = 1;
+uint16_t group_offsets[4] = {0,251,502,753};
+uint8_t group_latches[4] = {5,6,7,4};
+
+uint8_t pin_2_num[8] = {0x08,0x04,0x02,0x01, 0x80,0x40,0x20,0x10};
+
+uint8_t servo_positions[SERVOS];
+
+uint16_t servo_timings[MAX_TIMINGS];
+uint8_t  shift_output[MAX_TIMINGS];
+uint8_t  shift_latch[MAX_TIMINGS];
+
+uint16_t timer;
+uint8_t  counter = 0;
+uint8_t  pwm_active = 1;
+
+uint8_t update_reg_flag = 0;
 
 void setup() {
-  pinMode(STATUS_LED,OUTPUT);
   //setup pin modes
-  DDRF = 0xFF;  // sets pins B0 to B7 as outputs
-  pinMode(10,OUTPUT);
+  DDRF |= 0xF0;  // sets pins F7 to F4 as outputs
+  DDRB = 0xFF;  // sets pins B0 to B7 as outputs
+  pinMode(STATUS_LED,OUTPUT);
   //setup PC serial port
   Serial.begin(115200);
   Serial1.begin(115200);
@@ -40,131 +45,154 @@ void setup() {
   SPI.begin(); 
   SPI.setClockDivider(SPI_CLOCK_DIV2);
   
-  //set initial servo positions as neutral (so they have something to change from)
-  for(unsigned char i=0; i<32; i++){
-    servoPositions[i]=1500;
-  }
-  //set inital change times (no pulse drops ever)
-  for(unsigned char i=0; i<5; i++){
-    for(unsigned char j=0; j<201; j++){
-      pulseWidths[j][i]=0xFF;
-    }
-  }  
-  
   //start the servo-timing timer and associated interrupt
   Timer1.initialize(10);        // initialize timer1, and set a period of 10 uS
   Timer1.attachInterrupt(callback);  // attaches callback() as a timer overflow interrupt  
-}
 
-
-#define LARGEST_GROUP 3 //the largested-numbered group of servos. Largest possible is 
-#define INCREMENT_TIME 251 //the number of 10s of microseconds between pulse groups
-
-uint8_t group = 0;
-uint16_t min_period = 50;
-uint16_t max_period = INCREMENT_TIME-1;
-uint16_t switch_time = INCREMENT_TIME;
-
-uint16_t timer_inc = 0;       //number of time increments passeds
-
-uint8_t update_flag = 0;
-
-uint8_t output_byte = 0x00;
-uint8_t output_latch_low = 0x00;
-uint8_t output_latch_high = 0x00;
-
-void callback()
-{
-  timer_inc++;
-  // the trick here is to pre-compute as much as possible, so you're not incuring variable computation delays when shifting
-  if(update_flag == 1){ //if there is an update that needs to be made
-    // shift up an update to the appropriate shift register
-    SPDR = output_byte; // push the byte to be loaded to the SPI register
-    __asm__("nop\n\t"); // pause to wait for the spi register to complete its shift out
-    //while(!(SPSR & (1<<SPIF))); //wait till the register completes
-    PORTF &= output_latch_low; // clock the shift register latch pin low, setting the register
-    PORTF |= output_latch_high; // clock the shift register latch pin high, ready to be set low next time
-    update_flag=0;
+  for(uint8_t i=0; i<MAX_TIMINGS; i++){
+    servo_timings[i] = 0;
+    shift_output[i] = 0xFF;
+    shift_latch[i] = 0xFF;
   } 
-  
-  //update the servos in the appropriate group based on the groups timing array (pulseWidths)
-  if((timer_inc >= min_period) && (timer_inc <= max_period)){
-    if(pulseWidths[timer_inc - min_period][group] != 0xFF){ //if there are any changes to Port B
-      output_byte &= pulseWidths[timer_inc-min_period][group];
-      output_latch_low  = portBitMaskOnes[groupPin[group]];
-      output_latch_high = portBitMaskZeroes[groupPin[group]];
-      update_flag = 1;
-    }
+  for(uint8_t i=0; i<SERVOS; i++){
+    servo_positions[i] = 0;
+  } 
+  update_registers();
+}
+
+void callback(){
+  if(timer == servo_timings[counter]){
+    SPDR = shift_output[counter]; // push the byte to be loaded to the SPI register
+    //__asm__("nop\n\tnop\n\tnop\n\t"); // pause to wait for the spi register to complete its shift out
+    while(!(SPSR & (1<<SPIF))); //wait till the register completes
+    PORTF &= ~(shift_latch[counter]); // clock the shift register latch pin low, setting the register
+    PORTF |= shift_latch[counter];  // clock the shift register latch pin high, ready to be set low next time
+    counter++;
   }
   
-  //move to the next servo group, bring the pins high to start that servo period
-  if(timer_inc == 2000){
-    timer_inc = 0;  //reset increment timer
-    group = 0;
-    min_period = 50;
-    max_period = INCREMENT_TIME-1;
-    switch_time = INCREMENT_TIME;
-    pwm_active = 1; 
-    output_byte = 0xFF;
-    output_latch_low  = portBitMaskOnes[groupPin[group]];
-    output_latch_high = portBitMaskZeroes[groupPin[group]];
-    update_flag = 1;
+  timer++;
+  if(timer == 1010){
+    update_reg_flag=1;
   }
-  
-  if(timer_inc == switch_time){
-    if(group != LARGEST_GROUP){
-      group++; //increment the group
-      min_period += INCREMENT_TIME; // setup the new timing parameters for the group
-      max_period += INCREMENT_TIME;
-      switch_time += INCREMENT_TIME;
-      output_byte = 0xFF; 
-      output_latch_low  = portBitMaskOnes[groupPin[group]];
-      output_latch_high = portBitMaskZeroes[groupPin[group]];
-      update_flag = 1; 
-    }
-    else{ //if its the first group of the cycle
-      switch_time = 2000; // number to get a 20ms update cycle
-      pwm_active = 0;
-    }
+
+  if(timer == 2000){
+    update_reg_flag=0;
+    timer=0;
+    counter=0;
   }
 }
 
-uint8_t grouServoNumTable [32] = {0,1,2,3,4,5,6,7,
-                                  0,1,2,3,4,5,6,7,
-                          0,1,2,3,4,5,6,7,
-                          0,1,2,3,4,5,6,7};
-                          
-uint8_t groupTable [32] = {0,0,0,0,0,0,0,0,
-                   1,1,1,1,1,1,1,1,
-                   2,2,2,2,2,2,2,2,
-                   3,3,3,3,3,3,3,3};
-                          
-void updatePWM(uint8_t servoNum, uint8_t servoPos){
-  unsigned short tempPosIndex;
-  unsigned short servoPosIndex;
-  byte group;
-  byte groupServoNum;
+
+void update_registers(){
+  while( update_reg_flag != 1){
+    delayMicroseconds(10);
+  }  
+  for(uint8_t i=0; i<MAX_TIMINGS; i++){ // clear existing registers, so they can be cleanly written
+    servo_timings[i] = 0;
+    shift_output[i] = 0xFF;
+    shift_latch[i] = 0xFF;
+  } 
+
+  uint8_t current_timing=0;
+  uint8_t group=0;
+  uint8_t group_active_flag=0;
+  uint8_t servo_num=0;
   
-  groupServoNum = grouServoNumTable[servoNum];
-  group = groupTable[servoNum];
+  uint8_t group_on_time = 0;
   
-  tempPosIndex = servoPositions[servoNum]; //retreive current servo position
+  uint16_t servo_time=0;
   
-  while(pwm_active == 0){ // pause while pins are updating
-    delayMicroseconds(1); // should implement a double-buffer system instead
+  uint8_t group_active_servo_count = 0;
+  
+  // insert active servos into timing array
+  for(uint8_t group=0; group<GROUPS; group++){ // go through all groups
+    group_active_flag = 0;
+    
+    // ---- arrange the servos in the group from lowest to highest timing length -----
+
+    // see how many active servos in the group there are
+    // make a temp copy of postions to organize with
+    group_active_servo_count = 0;
+    uint16_t servo_positions_copy[SERVOS_PER_GROUP] = {};
+    for(uint8_t servo=0; servo<SERVOS_PER_GROUP; servo++){
+      if(servo_positions[SERVOS_PER_GROUP*group+servo] != 0){
+        group_active_servo_count++;
+      }
+      servo_num = servo+SERVOS_PER_GROUP*group;
+      servo_positions_copy[servo] = servo_positions[servo_num];
+    }
+    
+    // sort them into a new order
+    uint8_t group_timing_order[SERVOS_PER_GROUP] = {0xFF,0xFF,0xFF,0xFF, 0xFF,0xFF,0xFF,0xFF};
+    uint8_t low_count=0;
+    for(uint8_t i=0; i<group_active_servo_count; i++){
+      uint8_t lowest_position=251;
+      for(uint8_t j=0; j<SERVOS_PER_GROUP; j++){
+        if(servo_positions_copy[j] != 0){
+          if(servo_positions_copy[j] < lowest_position){
+            lowest_position = servo_positions_copy[j];
+            group_timing_order[low_count] = j;
+          }
+        }
+      }
+      servo_positions_copy[group_timing_order[low_count]]=0;
+      low_count++;
+    }
+    
+    
+    // ---- go through the active servos and insert timings---
+
+    // turn on all needed servos in the group at the beginning of their pulse
+    if(group_active_servo_count > 0){
+      group_on_time = current_timing;
+      servo_timings[group_on_time] = group_offsets[group];
+      shift_output[group_on_time] = 0x00; 
+      shift_latch[group_on_time] = (1<<group_latches[group]);
+
+      // turn on all the servos that will be turned on
+      for(uint8_t i=0; i<group_active_servo_count; i++){
+        shift_output[group_on_time] |= pin_2_num[group_timing_order[i]];
+      }
+      current_timing++;  
+    }
+    
+    for(uint8_t i=0; i<group_active_servo_count; i++){ // go through all active servos in the group
+      uint8_t servo = group_timing_order[i];
+      servo_num = servo+SERVOS_PER_GROUP*group;
+      servo_time = group_offsets[group] + servo_positions[servo_num];    // calculate the servo's time off
+      shift_output[group_on_time] |= pin_2_num[servo]; // turn on the servo at the group's turn-on time
+
+      // go over existing timings for this group, make sure there's not already one with this timing there 
+      uint8_t original = 1;
+      for(uint8_t j=1; j<group_active_servo_count; j++){
+        if( servo_timings[j+group_on_time] == servo_time){
+          shift_output[j+group_on_time] &= (~(pin_2_num[servo])); // turn off the servo at this timing
+          original=0;
+        }
+      }    
+     // create a timing if there's no existing timing
+     if(original == 1){
+        servo_timings[current_timing] = servo_time;
+        shift_output[current_timing] = shift_output[current_timing-1] & (~(pin_2_num[servo])); // turn off the servo at this timing
+        shift_latch[current_timing] = (1<<group_latches[group]);
+        current_timing++;
+     }
+    }
+    update_reg_flag=2;
   }
   
-  PORTE |= 0x40; // bring PE6 (pin 7) high, signals servo changed
-  if(servoPos == 0){  //kill the servo
-    pulseWidths[tempPosIndex][group] |=  bitMaskZeroes[groupServoNum]; //remove old update position   
-    servoPositions[servoNum] = servoPos; //update current servo position
+  // show the final register values
+  /*
+  for(uint8_t i=0; i<MAX_TIMINGS; i++){ // clear existing registers, so they can be cleanly written
+    Serial.print(i);
+    Serial.print(":\t");
+    Serial.print(servo_timings[i]);
+    Serial.print(",\t");
+    Serial.print(shift_output[i],HEX);
+    Serial.print(",\t");
+    Serial.println(shift_latch[i],HEX);
   }
-  else{
-    pulseWidths[tempPosIndex][group] |=  bitMaskZeroes[groupServoNum]; //remove old update position
-    pulseWidths[servoPos-50][group] &=  bitMaskOnes[groupServoNum]; //add to new update position
-    servoPositions[servoNum] = servoPos; //update current servo position
-  }
-  PORTE &= 0xBF; // bring PE6 (pin 7) low, signals servo changed 
+  */ 
 }
 
 boolean debug = false;
@@ -175,12 +203,13 @@ boolean posCounting = false;
 byte numString[6];
 int powers[] = {1,10,100,1000};
 
+
 byte numCount = 0;
 unsigned short total = 0;
 short inServo = -1;
 short inPos = -1;
+
 void loop() {
-  // Status LED light to indicate its turned on
   digitalWrite(STATUS_LED, HIGH);
   delay(500);
   digitalWrite(STATUS_LED, LOW);
@@ -189,94 +218,156 @@ void loop() {
   for(int i=0; i<32; i++){
     changeServo(i,0);
   }
-  long startTime=0;
-  long stopTime=0;
   
-  for(int i=0; i<32; i++){
-    changeServo(i,2500);
-  }
+  changeServo(0,1500);
+  changeServo(1,1500);
+  changeServo(2,1500);
+  changeServo(3,1500);
+  
+  delay(100);
 
-  
   while(true){
-    while(Serial.available()){
-      char inChar = (char)Serial.read();
-      switch(inChar){
-        case '#':
-          startTime = micros();
-          servoCounting = true;
-          numCount = 0;
-          inServo = -1;
-          inPos = -1;
-          break;
-        case 'P':
-          if(servoCounting){
-            inServo = tallyCount();
-            servoCounting = false;
-          }
-          posCounting =  true;
-          numCount = 0;
-          break; 
-        case '\r':
-        case '\n':
-          if(posCounting){
-            inPos = tallyCount();
-            posCounting = false;
-          }
-          // !TODO: Speed this up.
-          if((inServo >=0)&&(inServo <=31)&&(((inPos >= 500)&&(inPos <= 2500))||(inPos == 0))){
-            changeServo(inServo,inPos);
+    if(update_reg_flag == 1){
+      
+      update_registers();
+      
+    }
+    else{
+      if(Serial.available()) {
+        char inChar = (char)Serial.read();
+        switch(inChar){
+          case '#':
+            ON10;
+            servoCounting = true;
+            numCount = 0;
             inServo = -1;
             inPos = -1;
-          }
-          numCount = 0;
-          stopTime = micros();
-          Serial.print("time to execute: ");
-          Serial.println(stopTime-startTime);
-          break;
-        case 'V':
-          Serial.println("SERVOTOR32_v1.4");
-          break;
-        case 'C':
-          for(int i=0; i<32; i++){
-            updatePWM(i,150);
-          }
-          Serial.println("All Centered");
-          break;
-        case 'K':
-          for(int i=0; i<32; i++){
-            updatePWM(i,0);
-          }
-          Serial.println("All Turned Off");
-          break;
-        case 'L':
-          if(servoCounting){
-            inServo = tallyCount();
-            servoCounting = false;
-          }
-          changeServo(inServo, 0);
-          break;
-        default:
-          if((inChar > 47)&&(inChar < 58)){
-            if(numCount<4){
-              numString[numCount] = inChar-48;
-              numCount++;
+            break;
+          case 'P':
+            if(servoCounting){
+              inServo = tallyCount();
+              servoCounting = false;
             }
-          }
-          break;
-      } 
-    }
+            posCounting =  true;
+            numCount = 0;
+            break; 
+          case '\r':
+          case '\n':
+             OFF10;
+            if(posCounting){
+              inPos = tallyCount();
+              posCounting = false;
+            }
+            if((inServo >=0)&&(inServo <=31)&&(((inPos >= 500)&&(inPos <= 2500))||(inPos == -1))){
+              changeServo(inServo,inPos);
+              inServo = -1;
+              inPos = -1;
+            }
+            numCount = 0;
+            break;
+          case 'V':
+            Serial.println("SERVOTOR32_v1.3");
+            break;
+          case 'C':
+            for(int i=0; i<32; i++){
+              changeServo(i,1500);
+            }
+            Serial.println("All Centered");
+            break;
+          case 'K':
+            for(int i=0; i<32; i++){
+              changeServo(i,0);
+            }
+            Serial.println("All Turned Off");
+            break;
+          case 'L':
+            if(servoCounting){
+              inServo = tallyCount();
+              servoCounting = false;
+            }
+            changeServo(inServo, -1);
+            break;
+          default:
+            if((inChar > 47)&&(inChar < 58)){
+              if(numCount<4){
+                numString[numCount] = inChar-48;
+                numCount++;
+              }
+            }
+            break;
+        } 
+      }
+      if(Serial1.available()){
+        char inChar = (char)Serial1.read();
+        switch(inChar){
+          case '#':
+            servoCounting = true;
+            numCount = 0;
+            inServo = -1;
+            inPos = -1;
+            break;
+          case 'P':
+            if(servoCounting){
+              inServo = tallyCount();
+              servoCounting = false;
+            }
+            posCounting =  true;
+            numCount = 0;
+            break; 
+          case '\r':
+          case '\n':
+            if(posCounting){
+              inPos = tallyCount();
+              posCounting = false;
+            }
+            if((inServo >=0)&&(inServo <=31)&&(((inPos >= 500)&&(inPos <= 2500))||(inPos == -1))){
+              changeServo(inServo,inPos);
+              inServo = -1;
+              inPos = -1;
+            }
+            numCount = 0;
+            break;
+          case 'V':
+            Serial1.println("SERVOTOR32_v1.5");
+            break;
+          case 'C':
+            for(int i=0; i<32; i++){
+              changeServo(i,1500);
+            }
+            Serial1.println("All Centered");
+            break;
+          case 'K':
+            for(int i=0; i<32; i++){
+              changeServo(i,0);
+            }
+            Serial1.println("All Turned Off");
+            break;
+          case 'L':
+            if(servoCounting){
+              inServo = tallyCount();
+              servoCounting = false;
+            }
+            changeServo(inServo, -1);
+            break;
+          default:
+            if((inChar > 47)&&(inChar < 58)){
+              if(numCount<4){
+                numString[numCount] = inChar-48;
+                numCount++;
+              }
+            }
+            break;
+        } 
+      }
+    }  
   }
 }
 
-void changeServo(uint8_t servo, short pos){
-  updatePWM(servo,(uint8_t)(pos/10));
+void changeServo(byte servo, short pos){
+  servo_positions[servo] = pos/10;
 }
 
-// !TODO: increase the speed of this significantly
-// Is there a tables-based approach?
-// only works for numbers 3 digits or less
 short tallyCount(){
-   long 
    total=0;
    for(int i=0; i<numCount; i++){  
      total += powers[i]*numString[(numCount-1)-i];  
@@ -286,3 +377,4 @@ short tallyCount(){
    }
    return total;
 }
+
