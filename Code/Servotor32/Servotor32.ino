@@ -36,10 +36,10 @@ void setup() {
   DDRB = 0xFF;  // sets pins B0 to B7 as outputs
   pinMode(STATUS_LED,OUTPUT);
   //setup PC serial port
-  Serial.begin(115200);
-  Serial1.begin(115200);
-  delay(100); // delay to establish the usb connection. using the arduino while-serial command doesn't 
-              // let it boot properly when there's no USB conenction.
+  Serial.begin(9600);
+  Serial1.begin(9600);
+  //delay(100); // delay to establish the usb connection. using the arduino while-serial command doesn't 
+                // let it boot properly when there's no USB conenction.
   
   // setup SPI port
   SPI.begin(); 
@@ -60,7 +60,31 @@ void setup() {
   update_registers();
 }
 
+long unsigned int us_counter = 0;
+long unsigned int startTime = 0; 
+long unsigned int currentTime = 0; 
+long unsigned int last_update = 0;
+
+long unsigned int micros_new(){
+  return us_counter;
+}
+
+long unsigned int  millis_new(){
+  return us_counter/1000;
+}
+
+void delay_new(long unsigned int delay_time){
+  startTime = millis_new();
+  currentTime = millis_new() - startTime;
+  while(currentTime < delay_time){
+    delayMicroseconds(10);
+    currentTime = millis_new() - startTime;
+  }
+}
+
+
 void callback(){
+  cli();
   if(timer == servo_timings[counter]){
     SPDR = shift_output[counter]; // push the byte to be loaded to the SPI register
     //__asm__("nop\n\tnop\n\tnop\n\t"); // pause to wait for the spi register to complete its shift out
@@ -71,6 +95,7 @@ void callback(){
   }
   
   timer++;
+  us_counter += 10;
   if(timer == 1010){
     update_reg_flag=1;
   }
@@ -80,11 +105,13 @@ void callback(){
     timer=0;
     counter=0;
   }
+  sei();
 }
 
 
 void update_registers(){
   while( update_reg_flag != 1){
+    //__asm__("nop\n\tnop\n\tnop\n\tnop\n\tnop\n\tnop\n\tnop\n\tnop\n\tnop\n\tnop\n\tnop\n\tnop\n\t");
     delayMicroseconds(10);
   }  
   for(uint8_t i=0; i<MAX_TIMINGS; i++){ // clear existing registers, so they can be cleanly written
@@ -211,9 +238,9 @@ short inPos = -1;
 
 void loop() {
   digitalWrite(STATUS_LED, HIGH);
-  delay(500);
+  delay_new(500);
   digitalWrite(STATUS_LED, LOW);
-  delay(500);
+  delay_new(500);
   
   for(int i=0; i<32; i++){
     changeServo(i,0);
@@ -224,13 +251,18 @@ void loop() {
   changeServo(2,1500);
   changeServo(3,1500);
   
-  delay(100);
+  delay_new(100);
+  
 
   while(true){
+    TIMSK0 &= ~(_BV(TOIE0)); // disables the arduino delay function, but also
+                             // all but eliminates servo jitter 
+    TIMSK2 &= ~(_BV(TOIE2)); // disable the arduino tone  function, but also
+                             // also helps eliminate some jitter
+    TIMSK3 &= ~(_BV(TOIE3)); // for good measure
+    TIMSK4 &= ~(_BV(TOIE4)); // for good measure 
     if(update_reg_flag == 1){
-      
       update_registers();
-      
     }
     else{
       if(Serial.available()) {
@@ -260,17 +292,21 @@ void loop() {
             }
             if((inServo >=0)&&(inServo <=31)&&(((inPos >= 500)&&(inPos <= 2500))||(inPos == -1))){
               changeServo(inServo,inPos);
+              if((inServo == 25)||(inServo == 26)){
+                Serial.println(inServo); // only for debugging
+              }
+              
               inServo = -1;
               inPos = -1;
             }
             numCount = 0;
             break;
           case 'V':
-            Serial.println("SERVOTOR32_v1.5");
+            Serial.println("SERVOTOR32_v1.7");
             break;
           case 'C':
             for(int i=0; i<32; i++){
-              changeServo(i,1500);
+              Serial.println(i);
             }
             Serial.println("All Centered");
             break;
@@ -328,7 +364,7 @@ void loop() {
             numCount = 0;
             break;
           case 'V':
-            Serial1.println("SERVOTOR32_v1.5");
+            Serial1.println("SERVOTOR32_v1.7");
             break;
           case 'C':
             for(int i=0; i<32; i++){
