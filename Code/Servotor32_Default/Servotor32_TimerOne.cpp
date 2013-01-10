@@ -10,28 +10,28 @@
  *  To view a copy of this license, visit http://creativecommons.org/licenses/by/3.0/us/ 
  *  or send a letter to Creative Commons, 171 Second Street, Suite 300, San Francisco, California, 94105, USA.
  *
- *  See Google Code project http://code.google.com/p/arduino-timerone/ for latest
+ *  See Google Code project http://code.google.com/p/arduino-DBStepper_TimerOne/ for latest
  */
-#ifndef TIMERONE_cpp
-#define TIMERONE_cpp
+#ifndef Servotor32TimerOne_cpp
+#define Servotor32_TimerOne_cpp
 
-#include "TimerOne.h"
+#include "Servotor32_TimerOne.h"
 
-TimerOne Timer1;              // preinstatiate
+Servotor32_TimerOne Timer1;              // preinstatiate
 
 ISR(TIMER1_OVF_vect)          // interrupt service routine that wraps a user defined function supplied by attachInterrupt
 {
   Timer1.isrCallback();
 }
 
-void TimerOne::initialize(long microseconds)
+void Servotor32_TimerOne::initialize(long microseconds)
 {
   TCCR1A = 0;                 // clear control register A 
   TCCR1B = _BV(WGM13);        // set mode 8: phase and frequency correct pwm, stop the timer
   setPeriod(microseconds);
 }
 
-void TimerOne::setPeriod(long microseconds)
+void Servotor32_TimerOne::setPeriod(long microseconds)
 {
   long cycles = (F_CPU / 2000000) * microseconds;                                // the counter runs backwards after TOP, interrupt is at BOTTOM so divide microseconds by 2
   if(cycles < RESOLUTION)              clockSelectBits = _BV(CS10);              // no prescale, full xtal
@@ -45,7 +45,7 @@ void TimerOne::setPeriod(long microseconds)
   TCCR1B |= clockSelectBits;                                                     // reset clock select register
 }
 
-void TimerOne::setPwmDuty(char pin, int duty)
+void Servotor32_TimerOne::setPwmDuty(char pin, int duty)
 {
   unsigned long dutyCycle = pwmPeriod;
   dutyCycle *= duty;
@@ -54,7 +54,7 @@ void TimerOne::setPwmDuty(char pin, int duty)
   else if(pin == 2 || pin == 10) OCR1B = dutyCycle;
 }
 
-void TimerOne::pwm(char pin, int duty, long microseconds)  // expects duty cycle to be 10 bit (1024)
+void Servotor32_TimerOne::pwm(char pin, int duty, long microseconds)  // expects duty cycle to be 10 bit (1024)
 {
   if(microseconds > 0) setPeriod(microseconds);
   if(pin == 1 || pin == 9) {
@@ -69,13 +69,13 @@ void TimerOne::pwm(char pin, int duty, long microseconds)  // expects duty cycle
   start();
 }
 
-void TimerOne::disablePwm(char pin)
+void Servotor32_TimerOne::disablePwm(char pin)
 {
   if(pin == 1 || pin == 9)       TCCR1A &= ~_BV(COM1A1);   // clear the bit that enables pwm on PB1
   else if(pin == 2 || pin == 10) TCCR1A &= ~_BV(COM1B1);   // clear the bit that enables pwm on PB2
 }
 
-void TimerOne::attachInterrupt(void (*isr)(), long microseconds)
+void Servotor32_TimerOne::attachInterrupt(void (*isr)(), long microseconds)
 {
   if(microseconds > 0) setPeriod(microseconds);
   isrCallback = isr;                                       // register the user's callback with the real ISR
@@ -84,27 +84,27 @@ void TimerOne::attachInterrupt(void (*isr)(), long microseconds)
   start();
 }
 
-void TimerOne::detachInterrupt()
+void Servotor32_TimerOne::detachInterrupt()
 {
   TIMSK1 &= ~_BV(TOIE1);                                   // clears the timer overflow interrupt enable bit 
 }
 
-void TimerOne::start()
+void Servotor32_TimerOne::start()
 {
   TCCR1B |= clockSelectBits;
 }
 
-void TimerOne::stop()
+void Servotor32_TimerOne::stop()
 {
   TCCR1B &= ~(_BV(CS10) | _BV(CS11) | _BV(CS12));          // clears all clock selects bits
 }
 
-void TimerOne::restart()
+void Servotor32_TimerOne::restart()
 {
   TCNT1 = 0;
 }
 
-unsigned long TimerOne::read()		//returns the value of the timer in microseconds
+unsigned long Servotor32_TimerOne::read()		//returns the value of the timer in microseconds
 {									//rember! phase and freq correct mode counts up to then down again
 	unsigned int tmp=TCNT1;
 	char scale=0;

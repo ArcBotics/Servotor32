@@ -10,17 +10,17 @@
  *  To view a copy of this license, visit http://creativecommons.org/licenses/by/3.0/us/ 
  *  or send a letter to Creative Commons, 171 Second Street, Suite 300, San Francisco, California, 94105, USA.
  *
- *  See Google Code project http://code.google.com/p/arduino-timerone/ for latest
+ *  See Google Code project http://code.google.com/p/arduino-DBStepper_TimerOne/ for latest
  */
-#ifndef TIMERONE_h
-#define TIMERONE_h
+#ifndef Servotor32_TimerOne_h
+#define Servotor32_TimerOne_h
 
 #include <avr/io.h>
 #include <avr/interrupt.h>
 
 #define RESOLUTION 65536    // Timer1 is 16 bit
 
-class TimerOne
+class Servotor32_TimerOne
 {
   public:
   
@@ -43,5 +43,5 @@ class TimerOne
     void (*isrCallback)();
 };
 
-extern TimerOne Timer1;
+extern Servotor32_TimerOne Timer1;
 #endif
