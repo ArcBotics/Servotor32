@@ -31,9 +31,9 @@ public:
   
   void changeServo(byte, short);
   
-  void printStatus();
+  void printStatus(Stream*);
   
-  void processChar(char);
+  void process(Stream*);
   
   float ping();
   float multiPing(unsigned short);
