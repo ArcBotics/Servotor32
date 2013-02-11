@@ -246,55 +246,55 @@ void Servotor32::update_registers_fast(byte servo, signed short pos){
 }
 
 
-void Servotor32::printStatus(){
-  Serial.println("--------------------- Registers ----------------------");
+void Servotor32::printStatus(Stream *serial){
+  serial->println("--------------------- Registers ----------------------");
   
-  Serial.println("Servo Data:");
-  Serial.println("Servo\tPos\tTimeEnd\t");
+  serial->println("Servo Data:");
+  serial->println("Servo\tPos\tTimeEnd\t");
   for(byte i=0; i<SERVOS; i++){
-    Serial.print(i);
-    Serial.print("\t");
-    Serial.print(servo_positions[i]);
-    Serial.println("");
+    serial->print(i);
+    serial->print("\t");
+    serial->print(servo_positions[i]);
+    serial->println("");
   }
-  Serial.println("");
+  serial->println("");
 
-  Serial.println("Sorted Groups");
+  serial->println("Sorted Groups");
   for(byte i=0; i<GROUPS; i++){
-    Serial.print("Group: ");
-    Serial.println(i);
+    serial->print("Group: ");
+    serial->println(i);
     for(byte j=0; j<SERVOS_PER_GROUP; j++){
-      Serial.print("Servo: ");
-      Serial.print(servos_sorted[i][j]);
-      Serial.print("\t");
-      Serial.println(servo_positions[servos_sorted[i][j]]);
+      serial->print("Servo: ");
+      serial->print(servos_sorted[i][j]);
+      serial->print("\t");
+      serial->println(servo_positions[servos_sorted[i][j]]);
       
     }
   }  
 
-  Serial.println("Group Data:");
-  Serial.println("#\tActive\tHex");
+  serial->println("Group Data:");
+  serial->println("#\tActive\tHex");
   for(byte i=0; i<GROUPS; i++){
-    Serial.print(i);
-    Serial.print("\t");
-    Serial.print(servos_active_in_group[i]);
-    Serial.print("\t");
-    Serial.println(active_servos_hex[i],HEX);
+    serial->print(i);
+    serial->print("\t");
+    serial->print(servos_active_in_group[i]);
+    serial->print("\t");
+    serial->println(active_servos_hex[i],HEX);
   }
-  Serial.println("");
+  serial->println("");
   
-  Serial.println("Timings:");
-  Serial.println("Pos\tTiming\tOutput\tLatch");
+  serial->println("Timings:");
+  serial->println("Pos\tTiming\tOutput\tLatch");
   for(uint8_t i=0; i<MAX_TIMINGS; i++){ // clear existing registers, so they can be cleanly written
-    Serial.print(i);
-    Serial.print(":\t");
-    Serial.print(servo_timings[i]);
-    Serial.print(",\t");
-    Serial.print(shift_output[i],HEX);
-    Serial.print(",\t");
-    Serial.println(shift_latch[i],HEX);
+    serial->print(i);
+    serial->print(":\t");
+    serial->print(servo_timings[i]);
+    serial->print(",\t");
+    serial->print(shift_output[i],HEX);
+    serial->print(",\t");
+    serial->println(shift_latch[i],HEX);
   }
-  Serial.println("----------------------------------------------------");
+  serial->println("----------------------------------------------------");
 }
 
 // modify the state of a servo
@@ -323,72 +323,72 @@ unsigned short total = 0;
 short inServo = -1;
 short inPos = -1;
 
-void Servotor32::processChar(char inChar){
-  switch(inChar){
-    case '#':
-      servoCounting = true;
-      numCount = 0;
-      inServo = -1;
-      inPos = -1;
-      break;
-    case 'D':
-      printStatus();
-      break; 
-    case 'P':
-      if(servoCounting){
-        inServo = tallyCount();
-        servoCounting = false;
-      }
-      posCounting =  true;
-      numCount = 0;
-      break; 
-    case '\r':
-    case '\n':
-      if(posCounting){
-        inPos = tallyCount();
-        posCounting = false;
-      }
-      if((inServo >=0)&&(inServo <=31)&&(((inPos >= 500)&&(inPos <= 2500))||(inPos == -1))){
-        changeServo(inServo,inPos);        
+void Servotor32::process(Stream *serial){
+  if(serial->available()) { //process input from the USB
+    char inChar = (char)serial->read();
+    switch(inChar){
+      case '#':
+        servoCounting = true;
+        numCount = 0;
         inServo = -1;
         inPos = -1;
-      }
-      numCount = 0;
-      break;
-    case 'V':
-      Serial.println("SERVOTOR32_v2.0");
-      Serial1.println("SERVOTOR32_v2.0");
-      break;
-    case 'C':
-      for(int i=0; i<32; i++){
-        changeServo(i, 1500);
-      }
-      Serial.println("All Centered");
-      Serial1.println("All Centered");
-      break;
-    case 'K':
-      for(int i=0; i<32; i++){
-        changeServo(i,-1);
-      }
-      Serial.println("All Turned Off");
-      Serial1.println("All Turned Off");
-      break;
-    case 'L':
-      if(servoCounting){
-        inServo = tallyCount();
-        servoCounting = false;
-      }
-      changeServo(inServo, -1);
-      break;
-    default:
-      if((inChar > 47)&&(inChar < 58)){
-        if(numCount<4){
-          numString[numCount] = inChar-48;
-          numCount++;
+        break;
+      case 'D':
+        printStatus(serial);
+        break; 
+      case 'P':
+        if(servoCounting){
+          inServo = tallyCount();
+          servoCounting = false;
         }
-      }
-      break;
-  } 
+        posCounting =  true;
+        numCount = 0;
+        break; 
+      case '\r':
+      case '\n':
+        if(posCounting){
+          inPos = tallyCount();
+          posCounting = false;
+        }
+        if((inServo >=0)&&(inServo <=31)&&(((inPos >= 500)&&(inPos <= 2500))||(inPos == -1))){
+          changeServo(inServo,inPos);        
+          inServo = -1;
+          inPos = -1;
+        }
+        numCount = 0;
+        break;
+      case 'V':
+        serial->println("SERVOTOR32_v2.0");
+        break;
+      case 'C':
+        for(int i=0; i<32; i++){
+          changeServo(i, 1500);
+        }
+        serial->println("All Centered");
+        break;
+      case 'K':
+        for(int i=0; i<32; i++){
+          changeServo(i,-1);
+        }
+        serial->println("All Turned Off");
+        break;
+      case 'L':
+        if(servoCounting){
+          inServo = tallyCount();
+          servoCounting = false;
+        }
+        changeServo(inServo, -1);
+        break;
+      default:
+        if((inChar > 47)&&(inChar < 58)){
+          if(numCount<4){
+            numString[numCount] = inChar-48;
+            numCount++;
+          }
+        }
+        break;
+    }
+  }
 }
 
 short Servotor32::tallyCount(){
