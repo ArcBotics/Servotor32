@@ -4,7 +4,7 @@
 #include <string.h>
 #include "Arduino.h"
 
-#include "SERVOTOR32_SPI.h"
+#include "Servotor32_SPI.h"
 #include "Servotor32_TimerOne.h"
 
 Servotor32::Servotor32()
