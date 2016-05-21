@@ -314,7 +314,6 @@ boolean debug = false;
 boolean testMode = false;
 boolean servoCounting = false;
 boolean posCounting = false;
-boolean pinCounting = false;
 
 byte numString[6];
 int powers[] = {1,10,100,1000};
@@ -324,138 +323,8 @@ unsigned short total = 0;
 short inServo = -1;
 short inPos = -1;
 
-
-char pinCommand[3];
-uint8_t pinCount=0;
-
-void setPinCommand(){
-  if(debug){
-    Serial.print("Pin Command - ");
-  }
-
-  int pin = -1;
-  switch(pinCommand[0]){
-    case '0':
-      switch(pinCommand[1]){
-        case '0':
-            pin = 0;
-          break;
-        case '1':
-            pin = 1;
-          break;
-        case '2':
-            pin = 2;
-          break;
-        case '3':
-            pin = 3;
-          break;
-        case '5':
-            pin = 5;
-          break;
-        case '6':
-            pin = 6;
-          break;
-        case '7':
-            pin = 7;
-          break;
-        case '9':
-            pin = 9;
-          break;                
-      }
-      break;
-    case '1':
-      switch(pinCommand[1]){
-        case '0':
-            pin = 10;
-          break;
-        case '1':
-            pin = 11;
-          break;
-        case '2':
-            pin = 12;
-          break;
-        case '3':
-            pin = 13;
-          break;
-          break;
-        case '7':
-            pin = 17;
-          break;
-      }
-      break;
-    case '2':
-      switch(pinCommand[1]){
-        case '2':
-            pin = 22;
-          break;
-        case '3':
-            pin = 23;
-          break;
-      }
-    case 'A':
-      switch(pinCommand[1]){
-        case '4':
-            pin = A4;
-          break;
-        case '5':
-            pin = A5;
-          break;          
-        case '7':
-            pin = A7;
-          break;          
-        case '8':
-            pin = A8;
-          break;          
-        case '9':
-            pin = A9;
-          break;
-      }
-      break;
-    case 'R':
-      switch(pinCommand[1]){        
-        case 'X':
-            pin = 0;
-          break;    
-        case 'L':
-            pin = 17;
-          break;  
-      }
-      break;
-    case 'T':
-      switch(pinCommand[1]){
-        case 'X':
-          pin = 1;        
-          break;           
-      }
-      break;
-  }
-  if(debug){
-    Serial.print("Set pin ");
-    Serial.print(pin);
-  }
-
-  if(pin != -1){
-    pinMode(pin, OUTPUT);  
-    if(pinCommand[2] == 'H'){
-      digitalWrite(pin, HIGH);
-      if(debug){
-        Serial.println(" High");
-      }
-    }
-    if(pinCommand[2] == 'L'){
-      digitalWrite(pin, LOW);
-      if(debug){
-        Serial.println(" Low");
-      }
-    }
-  }
-  pinCount = 0;
-
-}
-
-
 void Servotor32::process(Stream *serial){
-  if(serial->available()) { //process input from the serial stream (USB or Serial)
+  if(serial->available()) { //process input from the USB
     char inChar = (char)serial->read();
     switch(inChar){
       case '#':
@@ -486,15 +355,10 @@ void Servotor32::process(Stream *serial){
           inServo = -1;
           inPos = -1;
         }
-        if(pinCounting){
-          // set the pin according to the pin Command
-            setPinCommand();
-        }
         numCount = 0;
-        pinCount = 0;
         break;
       case 'V':
-        serial->println("SERVOTOR32_v2.02");
+        serial->println("SERVOTOR32_v2.0");
         break;
       case 'C':
         for(int i=0; i<32; i++){
@@ -511,29 +375,11 @@ void Servotor32::process(Stream *serial){
       case 'L':
         if(servoCounting){
           inServo = tallyCount();
-          changeServo(inServo, -1);
           servoCounting = false;
         }
-        if(pinCounting){
-          if(pinCount < 3){
-            pinCommand[pinCount] = inChar;
-            pinCount++;
-          }          
-        }
-        break;
-      case 'S':
-        servoCounting = false;
-        posCounting = false;
-        pinCounting = true;
-        pinCount = 0;
+        changeServo(inServo, -1);
         break;
       default:
-        if(pinCounting){
-          if(pinCount < 3){
-            pinCommand[pinCount] = inChar;
-            pinCount++;
-          }
-        }
         if((inChar > 47)&&(inChar < 58)){
           if(numCount<4){
             numString[numCount] = inChar-48;

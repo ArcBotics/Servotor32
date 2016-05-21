@@ -37,9 +37,9 @@ public:
   
   float ping();
   float multiPing(unsigned short);
-
-private:
   void update_registers_fast(byte, signed short);
+ 
+private:
   void delete_from_sorted_array(byte, byte, signed short);
   void add_to_sorted_array(byte, byte, signed short);
   static void callback();
